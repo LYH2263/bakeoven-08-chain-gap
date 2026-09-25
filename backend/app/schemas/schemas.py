@@ -24,6 +24,8 @@ class BatchOut(BaseModel):
     code: str
     start_min: int
     status: str
+    chain_group: str | None = None
+    chain_max_gap_min: int | None = None
     product_name: str | None = None
     oven_label: str | None = None
     ferment_end: int | None = None
@@ -36,6 +38,13 @@ class BatchCreate(BaseModel):
     oven_id: int
     start_min: int = Field(ge=0, le=24 * 60 - 1)
     code: str | None = None
+    chain_group: str | None = None
+    chain_max_gap_min: int | None = Field(default=None, ge=0)
+
+
+class BatchUpdate(BaseModel):
+    chain_group: str | None = None
+    chain_max_gap_min: int | None = Field(default=None, ge=0)
 
 
 class GanttBlock(BaseModel):
@@ -46,6 +55,7 @@ class GanttBlock(BaseModel):
     phase: str
     start_min: int
     end_min: int
+    chain_group: str | None = None
 
 
 class ConflictOut(BaseModel):

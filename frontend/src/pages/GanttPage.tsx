@@ -1,8 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
+import type { CSSProperties } from "react";
 import { api } from "../api/client";
-type Block = { batch_id: number; code: string; oven_id: number; oven_label: string; phase: string; start_min: number; end_min: number };
+type Block = { batch_id: number; code: string; oven_id: number; oven_label: string; phase: string; start_min: number; end_min: number; chain_group?: string | null };
 const DAY_START = 8 * 60, DAY_END = 18 * 60, SPAN = DAY_END - DAY_START;
 function pct(m: number) { return ((m - DAY_START) / SPAN) * 100; }
+function chainColor(group: string) {
+  let h = 0;
+  for (const ch of group) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return `hsl(${h} 85% 68%)`;
+}
 export default function GanttPage() {
   const [blocks, setBlocks] = useState<Block[]>([]);
   useEffect(() => { api<Block[]>("/gantt").then(setBlocks); }, []);
@@ -14,21 +20,38 @@ export default function GanttPage() {
     }
     return [...map.entries()];
   }, [blocks]);
+  const groups = useMemo(
+    () => [...new Set(blocks.map(b => b.chain_group).filter((g): g is string => !!g))].sort(),
+    [blocks],
+  );
   return (<>
     <h2>甘特（生产占炉）</h2>
+    {groups.length > 0 && (
+      <div className="chain-legend">连烤组：
+        {groups.map(g => {
+          const style = { "--chain": chainColor(g) } as CSSProperties;
+          return <span key={g} className="chain-chip" style={style}>{g}</span>;
+        })}
+      </div>
+    )}
     <div className="axis"><div /><div className="axis-scale"><span>08:00</span><span>12:00</span><span>18:00</span></div></div>
     <div className="gantt">
       {rows.map(([oid, row]) => (
         <div className="gantt-row" key={oid}>
           <div>{row.label}</div>
           <div className="gantt-track">
-            {row.blocks.map((b, i) => (
-              <div key={i} className={`gantt-block ${b.phase}`}
-                style={{ left: `${pct(b.start_min)}%`, width: `${((b.end_min - b.start_min) / SPAN) * 100}%` }}
-                title={`${b.code} ${b.phase}`}>
-                {b.code}/{b.phase === "ferment" ? "酵" : "烤"}
-              </div>
-            ))}
+            {row.blocks.map((b, i) => {
+              const style: CSSProperties = { left: `${pct(b.start_min)}%`, width: `${((b.end_min - b.start_min) / SPAN) * 100}%` };
+              if (b.chain_group) (style as Record<string, string>)["--chain"] = chainColor(b.chain_group);
+              return (
+                <div key={i} className={`gantt-block ${b.phase}${b.chain_group ? " chained" : ""}`}
+                  style={style}
+                  title={`${b.code} ${b.phase}${b.chain_group ? ` 连烤组${b.chain_group}` : ""}`}>
+                  {b.chain_group && <span className="chain-tag">{b.chain_group}</span>}
+                  {b.code}/{b.phase === "ferment" ? "酵" : "烤"}
+                </div>
+              );
+            })}
           </div>
         </div>
       ))}

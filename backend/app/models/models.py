@@ -29,6 +29,8 @@ class Batch(Base):
     code: Mapped[str] = mapped_column(String(40), unique=True)
     start_min: Mapped[int] = mapped_column(Integer)  # minutes from 00:00
     status: Mapped[str] = mapped_column(String(20), default="scheduled")
+    chain_group: Mapped[str | None] = mapped_column(String(40), nullable=True)  # 连烤组号
+    chain_max_gap_min: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 组内最大空档
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

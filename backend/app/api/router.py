@@ -7,6 +7,7 @@ from app.models.models import Batch, ConflictLog, Oven, Product
 from app.schemas.schemas import (
     BatchCreate,
     BatchOut,
+    BatchUpdate,
     ConflictOut,
     GanttBlock,
     OvenOut,
@@ -14,11 +15,13 @@ from app.schemas.schemas import (
     WindowOut,
 )
 from app.services.oven_engine import (
+    ChainMember,
     Occupancy,
     RecipeDurations,
     build_occupancies,
     find_conflicts,
     next_free_window,
+    validate_chain_group,
 )
 
 api_router = APIRouter()
@@ -26,6 +29,39 @@ api_router = APIRouter()
 
 def _recipe(p: Product) -> RecipeDurations:
     return RecipeDurations(p.ferment_min, p.bake_min)
+
+
+def _normalize_group(value: str | None) -> str | None:
+    if value is None:
+        return None
+    v = value.strip()
+    return v or None
+
+
+def _chain_member(b: Batch, p: Product, max_gap_min: int | None = None) -> ChainMember:
+    recipe = _recipe(p)
+    gap = max_gap_min if max_gap_min is not None else (b.chain_max_gap_min or 0)
+    return ChainMember(
+        batch_id=b.id,
+        code=b.code,
+        oven_id=b.oven_id,
+        start_min=b.start_min,
+        end_min=b.start_min + recipe.total,
+        max_gap_min=gap,
+    )
+
+
+def _group_members(db: Session, group: str, exclude_id: int | None = None) -> list[ChainMember]:
+    rows = db.scalars(select(Batch).where(Batch.chain_group == group)).all()
+    out: list[ChainMember] = []
+    for b in rows:
+        if exclude_id is not None and b.id == exclude_id:
+            continue
+        p = db.get(Product, b.product_id)
+        if not p:
+            continue
+        out.append(_chain_member(b, p))
+    return out
 
 
 def _all_occupancies(db: Session) -> list[Occupancy]:
@@ -51,6 +87,8 @@ def _batch_out(db: Session, b: Batch) -> BatchOut:
         code=b.code,
         start_min=b.start_min,
         status=b.status,
+        chain_group=b.chain_group,
+        chain_max_gap_min=b.chain_max_gap_min,
         product_name=p.name if p else None,
         oven_label=o.label if o else None,
         ferment_end=ferment_end,
@@ -86,10 +124,24 @@ def create_batch(body: BatchCreate, db: Session = Depends(get_db)):
     if not product or not oven:
         raise HTTPException(404, "产品或炉位不存在")
     recipe = _recipe(product)
+    code = body.code or f"BO-{body.start_min}"
+    group = _normalize_group(body.chain_group)
+    max_gap = body.chain_max_gap_min if group else None
+    if group and max_gap is None:
+        max_gap = 0
+    if group:
+        members = _group_members(db, group)
+        members.append(
+            ChainMember(0, code, oven.id, body.start_min, body.start_min + recipe.total, max_gap)
+        )
+        violation = validate_chain_group(group, members)
+        if violation:
+            db.add(ConflictLog(batch_code=code, oven_id=oven.id, detail=violation.detail))
+            db.commit()
+            raise HTTPException(409, violation.detail)
     candidates = build_occupancies(oven.id, -1, body.start_min, recipe)
     existing = _all_occupancies(db)
     hits = find_conflicts(existing, candidates)
-    code = body.code or f"BO-{body.start_min}"
     if hits:
         ex, cand = hits[0]
         detail = (
@@ -104,8 +156,51 @@ def create_batch(body: BatchCreate, db: Session = Depends(get_db)):
         oven_id=oven.id,
         code=code,
         start_min=body.start_min,
+        chain_group=group,
+        chain_max_gap_min=max_gap,
     )
     db.add(batch)
+    db.commit()
+    db.refresh(batch)
+    return _batch_out(db, batch)
+
+
+@api_router.patch("/batches/{batch_id}", response_model=BatchOut)
+def update_batch(batch_id: int, body: BatchUpdate, db: Session = Depends(get_db)):
+    batch = db.get(Batch, batch_id)
+    if not batch:
+        raise HTTPException(404, "批次不存在")
+    fields = body.model_fields_set
+    old_group = batch.chain_group
+    new_group = _normalize_group(body.chain_group) if "chain_group" in fields else old_group
+    if "chain_max_gap_min" in fields:
+        new_gap = body.chain_max_gap_min
+    elif "chain_group" in fields and new_group != old_group:
+        new_gap = None
+    else:
+        new_gap = batch.chain_max_gap_min
+    if new_group is None:
+        new_gap = None
+    elif new_gap is None:
+        new_gap = 0
+
+    # The whole affected group(s) must stay valid after the edit, otherwise
+    # the edit is rejected and nothing changes (no half group on the gantt).
+    affected = {g for g in (old_group, new_group) if g}
+    for group in sorted(affected):
+        members = _group_members(db, group, exclude_id=batch.id)
+        if new_group == group:
+            p = db.get(Product, batch.product_id)
+            if p:
+                members.append(_chain_member(batch, p, max_gap_min=new_gap))
+        violation = validate_chain_group(group, members)
+        if violation:
+            db.add(ConflictLog(batch_code=batch.code, oven_id=batch.oven_id, detail=violation.detail))
+            db.commit()
+            raise HTTPException(409, violation.detail)
+
+    batch.chain_group = new_group
+    batch.chain_max_gap_min = new_gap
     db.commit()
     db.refresh(batch)
     return _batch_out(db, batch)
@@ -129,6 +224,7 @@ def gantt(db: Session = Depends(get_db)):
                     phase=occ.phase,
                     start_min=occ.interval.start,
                     end_min=occ.interval.end,
+                    chain_group=b.chain_group,
                 )
             )
     return blocks
