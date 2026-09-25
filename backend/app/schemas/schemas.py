@@ -28,6 +28,9 @@ class BatchOut(BaseModel):
     oven_label: str | None = None
     ferment_end: int | None = None
     bake_end: int | None = None
+    chain_group_id: int | None = None
+    chain_group: str | None = None
+    chain_max_gap_min: int | None = None
     model_config = {"from_attributes": True}
 
 
@@ -36,6 +39,27 @@ class BatchCreate(BaseModel):
     oven_id: int
     start_min: int = Field(ge=0, le=24 * 60 - 1)
     code: str | None = None
+    chain_group: str | None = None
+    chain_max_gap_min: int | None = Field(default=None, ge=0)
+
+
+class BatchChainUpdate(BaseModel):
+    """Edit a batch's chain-group assignment and/or the group's max gap.
+
+    Fields absent from the request body are left untouched; an explicit
+    null/empty chain_group unassigns the batch from its group.
+    """
+
+    chain_group: str | None = None
+    chain_max_gap_min: int | None = Field(default=None, ge=0)
+
+
+class ChainGroupOut(BaseModel):
+    id: int
+    name: str
+    max_gap_min: int
+    member_codes: list[str] = []
+    model_config = {"from_attributes": True}
 
 
 class GanttBlock(BaseModel):
@@ -46,6 +70,7 @@ class GanttBlock(BaseModel):
     phase: str
     start_min: int
     end_min: int
+    chain_group: str | None = None
 
 
 class ConflictOut(BaseModel):

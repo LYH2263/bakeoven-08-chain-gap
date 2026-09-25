@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from app.api.router import api_router
 from app.config import settings
@@ -9,9 +10,32 @@ from app.database import Base, SessionLocal, engine
 from app.services.seed import seed_if_empty
 
 
+def ensure_columns() -> None:
+    """Lightweight additive migration for pre-existing databases.
+
+    create_all() makes new tables but never ALTERs an existing one, so the
+    chain-group foreign key is added here when missing.
+    """
+    with engine.begin() as conn:
+        cols = conn.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'batches'"
+            )
+        ).scalars().all()
+        if "chain_group_id" not in cols:
+            conn.execute(
+                text(
+                    "ALTER TABLE batches ADD COLUMN chain_group_id INTEGER "
+                    "REFERENCES chain_groups(id)"
+                )
+            )
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    ensure_columns()
     if settings.seed_on_empty:
         db = SessionLocal()
         try:

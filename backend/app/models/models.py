@@ -21,6 +21,13 @@ class Oven(Base):
     capacity_note: Mapped[str] = mapped_column(String(80), default="")
 
 
+class ChainGroup(Base):
+    __tablename__ = "chain_groups"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(40), unique=True)
+    max_gap_min: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class Batch(Base):
     __tablename__ = "batches"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -29,7 +36,12 @@ class Batch(Base):
     code: Mapped[str] = mapped_column(String(40), unique=True)
     start_min: Mapped[int] = mapped_column(Integer)  # minutes from 00:00
     status: Mapped[str] = mapped_column(String(20), default="scheduled")
+    chain_group_id: Mapped[int | None] = mapped_column(
+        ForeignKey("chain_groups.id"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    chain_group: Mapped[ChainGroup | None] = relationship()
 
 
 class ConflictLog(Base):
